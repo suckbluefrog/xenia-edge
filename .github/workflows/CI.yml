@@ -1,18 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches-ignore:
-      - edge
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - 'LICENSE'
-  pull_request:
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - 'LICENSE'
   workflow_dispatch:
 
 # No workflow-level `permissions:` block; each job declares its own minimum

@@ -261,14 +261,13 @@ jobs:
           mkdir -p artifacts/release
           mv "$appimage_file" artifacts/release/xenia_edge_linux_aarch64_experimental.AppImage
           chmod +x artifacts/release/xenia_edge_linux_aarch64_experimental.AppImage
-          cp LICENSE artifacts/release/
 
       - name: Upload xenia edge ARM64 AppImage
         if: steps.prepare_appimage.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: xenia_edge_linux_aarch64_experimental
-          path: artifacts/release
+          path: artifacts/release/xenia_edge_linux_aarch64_experimental.AppImage
           if-no-files-found: error
 
       - name: Publish release
@@ -296,14 +295,14 @@ jobs:
           } > "$notes"
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$appimage" artifacts/release/LICENSE --clobber
+            gh release upload "$tag" "$appimage" --clobber
             gh release edit "$tag" \
               --target "$release_target" \
               --title "xenia_edge linux aarch64 experimental" \
               --notes-file "$notes"
           else
             gh release create "$tag" \
-              "$appimage" artifacts/release/LICENSE \
+              "$appimage" \
               --target "$release_target" \
               --title "xenia_edge linux aarch64 experimental" \
               --notes-file "$notes"
