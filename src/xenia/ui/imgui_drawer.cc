@@ -469,6 +469,27 @@ bool ImGuiDrawer::LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config,
   return false;
 }
 
+#if XE_PLATFORM_LINUX
+static bool IsFontconfigFontUsableByImGui(FcPattern* font,
+                                          const char* font_path) {
+#if defined(FC_VARIABLE)
+  FcBool variable = FcFalse;
+  if (FcPatternGetBool(font, FC_VARIABLE, 0, &variable) == FcResultMatch &&
+      variable) {
+    return false;
+  }
+#endif
+
+  // Fedora may prefer Noto CJK variable TTC files. stb_truetype in Dear ImGui
+  // can fail to parse those, so let fontconfig fall through to a regular CJK
+  // face instead.
+  return std::strstr(font_path, "/google-noto-sans-cjk-vf-fonts/") == nullptr &&
+         std::strstr(font_path, "NotoSansCJK-VF") == nullptr &&
+         std::strstr(font_path, "-VF.") == nullptr &&
+         std::strstr(font_path, "-VF-") == nullptr;
+}
+#endif
+
 bool ImGuiDrawer::LoadJapaneseFont(ImGuiIO& io, float font_size) {
 #if XE_PLATFORM_WIN32
   PWSTR fonts_dir;
@@ -516,28 +537,41 @@ bool ImGuiDrawer::LoadJapaneseFont(ImGuiIO& io, float font_size) {
   FcConfigSubstitute(config, pattern, FcMatchPattern);
   FcDefaultSubstitute(pattern);
 
-  // Find the best matching font
+  // Walk matching fonts in preference order. The first fontconfig match may be
+  // a variable TTC that ImGui's stb_truetype backend can't parse.
   FcResult result;
-  FcPattern* font = FcFontMatch(config, pattern, &result);
+  FcFontSet* fonts = FcFontSort(config, pattern, FcTrue, nullptr, &result);
 
   bool success = false;
-  if (font) {
-    FcChar8* file = nullptr;
-    if (FcPatternGetString(font, FC_FILE, 0, &file) == FcResultMatch) {
-      const char* font_path = reinterpret_cast<const char*>(file);
-
-      if (std::filesystem::exists(font_path)) {
-        ImFontConfig jp_font_config;
-        jp_font_config.MergeMode = true;
-        jp_font_config.OversampleH = jp_font_config.OversampleV = 2;
-        jp_font_config.PixelSnapH = true;
-
-        io.Fonts->AddFontFromFileTTF(font_path, font_size, &jp_font_config,
-                                     io.Fonts->GetGlyphRangesJapanese());
-        success = true;
+  if (fonts) {
+    for (int i = 0; i < fonts->nfont; ++i) {
+      FcPattern* font = fonts->fonts[i];
+      FcChar8* file = nullptr;
+      if (FcPatternGetString(font, FC_FILE, 0, &file) != FcResultMatch) {
+        continue;
       }
+
+      const char* font_path = reinterpret_cast<const char*>(file);
+      if (!std::filesystem::exists(font_path)) {
+        continue;
+      }
+
+      if (!IsFontconfigFontUsableByImGui(font, font_path)) {
+        XELOGW("Skipping CJK font unsupported by ImGui: {}", font_path);
+        continue;
+      }
+
+      ImFontConfig jp_font_config;
+      jp_font_config.MergeMode = true;
+      jp_font_config.OversampleH = jp_font_config.OversampleV = 2;
+      jp_font_config.PixelSnapH = true;
+
+      io.Fonts->AddFontFromFileTTF(font_path, font_size, &jp_font_config,
+                                   io.Fonts->GetGlyphRangesJapanese());
+      success = true;
+      break;
     }
-    FcPatternDestroy(font);
+    FcFontSetDestroy(fonts);
   }
 
   FcCharSetDestroy(charset);
