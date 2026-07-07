@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
@@ -172,3 +172,36 @@ jobs:
           name: xenia_edge_linux_aarch64_experimental
           path: artifacts/release
           if-no-files-found: error
+
+      - name: Publish release
+        if: steps.prepare_appimage.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eux
+          tag="${GITHUB_SHA::7}"
+          appimage="artifacts/release/xenia_edge_linux_aarch64_experimental.AppImage"
+          notes="release_notes.md"
+
+          {
+            echo "Experimental Linux ARM64 AppImage build."
+            echo ""
+            echo "Built on Ubuntu 24.04 ARM64 from the edge branch."
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "$notes"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$appimage" artifacts/release/LICENSE --clobber
+            gh release edit "$tag" \
+              --target "$GITHUB_SHA" \
+              --title "xenia_edge linux aarch64 experimental" \
+              --notes-file "$notes"
+          else
+            gh release create "$tag" \
+              "$appimage" artifacts/release/LICENSE \
+              --target "$GITHUB_SHA" \
+              --title "xenia_edge linux aarch64 experimental" \
+              --notes-file "$notes"
+          fi
