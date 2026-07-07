@@ -8,23 +8,100 @@ on:
       - '*.md'
       - 'docs/**'
       - LICENSE
+  schedule:
+    - cron: "17,47 * * * *"
   workflow_dispatch:
+    inputs:
+      source:
+        description: Source branch to build
+        required: true
+        default: fork
+        type: choice
+        options:
+          - fork
+          - upstream
 
 concurrency:
   group: linux-aarch64-appimage-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
   actions: write
 
 jobs:
+  resolve-source:
+    name: Resolve source
+    runs-on: ubuntu-24.04
+    outputs:
+      repository: ${{ steps.source.outputs.repository }}
+      sha: ${{ steps.source.outputs.sha }}
+      short_sha: ${{ steps.source.outputs.short_sha }}
+      release_tag: ${{ steps.source.outputs.release_tag }}
+      release_target: ${{ steps.source.outputs.release_target }}
+      should_build: ${{ steps.source.outputs.should_build }}
+      source_name: ${{ steps.source.outputs.source_name }}
+    steps:
+      - name: Resolve source commit
+        id: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISPATCH_SOURCE: ${{ github.event.inputs.source || 'fork' }}
+          UPSTREAM_REPOSITORY: has207/xenia-edge
+          UPSTREAM_BRANCH: edge
+        run: |
+          set -eu
+
+          source_name="fork"
+          repository="$GITHUB_REPOSITORY"
+          sha="$GITHUB_SHA"
+
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] || \
+             { [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_SOURCE" = "upstream" ]; }; then
+            source_name="upstream"
+            repository="$UPSTREAM_REPOSITORY"
+            sha="$(git ls-remote "https://github.com/${UPSTREAM_REPOSITORY}.git" "refs/heads/${UPSTREAM_BRANCH}" | cut -f1)"
+            if [ -z "$sha" ]; then
+              echo "::error::Could not resolve ${UPSTREAM_REPOSITORY}:${UPSTREAM_BRANCH}"
+              exit 1
+            fi
+          fi
+
+          short_sha="$(printf '%s' "$sha" | cut -c1-7)"
+          release_target="$sha"
+          if [ "$repository" != "$GITHUB_REPOSITORY" ]; then
+            release_tag="upstream-edge-${short_sha}"
+            release_target="$GITHUB_SHA"
+          else
+            release_tag="$short_sha"
+          fi
+
+          should_build=true
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            should_build=false
+            echo "Release $release_tag already exists; skipping build."
+          fi
+
+          {
+            echo "repository=$repository"
+            echo "sha=$sha"
+            echo "short_sha=$short_sha"
+            echo "release_tag=$release_tag"
+            echo "release_target=$release_target"
+            echo "should_build=$should_build"
+            echo "source_name=$source_name"
+          } >> "$GITHUB_OUTPUT"
+
   build-linux-aarch64-appimage:
     name: Build Linux ARM64 AppImage
+    needs: resolve-source
+    if: needs.resolve-source.outputs.should_build == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
         with:
+          repository: ${{ needs.resolve-source.outputs.repository }}
+          ref: ${{ needs.resolve-source.outputs.sha }}
           fetch-depth: 0
 
       - name: Cache linuxdeploy tools
@@ -180,7 +257,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -eux
-          tag="${GITHUB_SHA::7}"
+          tag="${{ needs.resolve-source.outputs.release_tag }}"
+          source_name="${{ needs.resolve-source.outputs.source_name }}"
+          source_repository="${{ needs.resolve-source.outputs.repository }}"
+          source_sha="${{ needs.resolve-source.outputs.sha }}"
+          release_target="${{ needs.resolve-source.outputs.release_target }}"
           appimage="artifacts/release/xenia_edge_linux_aarch64_experimental.AppImage"
           notes="release_notes.md"
 
@@ -188,20 +269,21 @@ jobs:
             echo "Experimental Linux ARM64 AppImage build."
             echo ""
             echo "Built on Ubuntu 24.04 ARM64 from the edge branch."
-            echo "Commit: ${GITHUB_SHA}"
+            echo "Source: ${source_name} (${source_repository})"
+            echo "Source commit: ${source_sha}"
             echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > "$notes"
 
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$appimage" artifacts/release/LICENSE --clobber
             gh release edit "$tag" \
-              --target "$GITHUB_SHA" \
+              --target "$release_target" \
               --title "xenia_edge linux aarch64 experimental" \
               --notes-file "$notes"
           else
             gh release create "$tag" \
               "$appimage" artifacts/release/LICENSE \
-              --target "$GITHUB_SHA" \
+              --target "$release_target" \
               --title "xenia_edge linux aarch64 experimental" \
               --notes-file "$notes"
           fi
