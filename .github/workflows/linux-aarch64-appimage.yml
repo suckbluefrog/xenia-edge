@@ -104,6 +104,26 @@ jobs:
           ref: ${{ needs.resolve-source.outputs.sha }}
           fetch-depth: 0
 
+      - name: Apply local source patches
+        env:
+          PATCH_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/.github/patches/001-imgui-cjk-font-fallback.patch
+        run: |
+          set -eu
+          patch_file=".github/patches/001-imgui-cjk-font-fallback.patch"
+          if [ ! -f "$patch_file" ]; then
+            patch_file="/tmp/001-imgui-cjk-font-fallback.patch"
+            wget -q "$PATCH_URL" -O "$patch_file"
+          fi
+
+          if git apply --check "$patch_file"; then
+            git apply "$patch_file"
+          elif git apply --reverse --check "$patch_file"; then
+            echo "CJK font fallback patch is already applied."
+          else
+            echo "::error::Could not apply CJK font fallback patch."
+            exit 1
+          fi
+
       - name: Cache linuxdeploy tools
         id: cache-linuxdeploy
         uses: actions/cache@v5
