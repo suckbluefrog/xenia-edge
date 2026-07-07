@@ -1,0 +1,174 @@
+name: Linux ARM64 AppImage
+
+on:
+  push:
+    branches:
+      - edge
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - LICENSE
+  workflow_dispatch:
+
+concurrency:
+  group: linux-aarch64-appimage-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build-linux-aarch64-appimage:
+    name: Build Linux ARM64 AppImage
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Cache linuxdeploy tools
+        id: cache-linuxdeploy
+        uses: actions/cache@v5
+        with:
+          path: ~/linuxdeploy
+          key: ${{ runner.os }}-${{ runner.arch }}-linuxdeploy-tools-aarch64
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-linuxdeploy-
+
+      - name: Cache Slang
+        id: cache-slang
+        uses: actions/cache@v5
+        with:
+          path: .slang
+          # Keep in sync with SLANG_VERSION in xenia-build.py.
+          key: ${{ runner.os }}-${{ runner.arch }}-slang-2026.8
+
+      - name: Download Slang
+        if: steps.cache-slang.outputs.cache-hit != 'true'
+        run: ./xenia-build.py slang
+
+      - name: Setup
+        run: |
+          set -eux
+          UBUNTU_BASE=$(lsb_release -cs)
+          sudo apt-get -y update
+          sudo apt-get -y install ca-certificates gnupg software-properties-common wget
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-add-repository -y "deb http://apt.llvm.org/${UBUNTU_BASE}/ llvm-toolchain-${UBUNTU_BASE}-21 main"
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
+          sudo apt-get -y update
+          sudo apt-get -y install \
+            clang-21 \
+            cmake \
+            file \
+            g++-14 \
+            libasound2-dev \
+            libdbus-1-dev \
+            libfontconfig1-dev \
+            libfuse2t64 \
+            libgtk-3-dev \
+            libpulse-dev \
+            libudev-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxrandr-dev \
+            libxss-dev \
+            libxtst-dev \
+            lld-21 \
+            ninja-build \
+            wget
+
+          if [ '${{ steps.cache-linuxdeploy.outputs.cache-hit }}' != 'true' ]; then
+            mkdir -p ~/linuxdeploy
+            wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage -O ~/linuxdeploy/linuxdeploy
+            wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-aarch64.AppImage -O ~/linuxdeploy/linuxdeploy-plugin-appimage
+            chmod +x ~/linuxdeploy/linuxdeploy ~/linuxdeploy/linuxdeploy-plugin-appimage
+          fi
+          echo "$HOME/linuxdeploy" >> "$GITHUB_PATH"
+
+          git submodule update --init --depth=1 -j$(getconf _NPROCESSORS_ONLN) $(grep -oP '(?<=path = )(?!third_party\/DirectXShaderCompiler).+' .gitmodules)
+          ./xenia-build.py fetchdata
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Build
+        env:
+          CC: clang-21
+          CXX: clang++-21
+          SCCACHE_GHA_ENABLED: "true"
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
+        run: ./xenia-build.py build --config=Release --target=xenia-app
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Prepare AppImage
+        id: prepare_appimage
+        run: |
+          set -eux
+          binary=build/bin/Linux/Release/xenia_edge
+          if [ "$(stat -c%s "$binary")" -le 100000 ]; then
+            echo "::error::Binary is too small."
+            exit 1
+          fi
+          file "$binary"
+          if ! file "$binary" | grep -Eqi 'aarch64|arm64'; then
+            echo "::error::$binary is not an ARM64 binary."
+            exit 1
+          fi
+          chmod +x "$binary"
+
+          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/16x16/apps
+          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/32x32/apps
+          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/48x48/apps
+          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/64x64/apps
+          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/128x128/apps
+          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/256x256/apps
+          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/512x512/apps
+          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/1024x1024/apps
+
+          cp assets/icon/16.png artifacts/xenia_edge/usr/share/icons/hicolor/16x16/apps/xenia_edge.png
+          cp assets/icon/32.png artifacts/xenia_edge/usr/share/icons/hicolor/32x32/apps/xenia_edge.png
+          cp assets/icon/48.png artifacts/xenia_edge/usr/share/icons/hicolor/48x48/apps/xenia_edge.png
+          cp assets/icon/64.png artifacts/xenia_edge/usr/share/icons/hicolor/64x64/apps/xenia_edge.png
+          cp assets/icon/128.png artifacts/xenia_edge/usr/share/icons/hicolor/128x128/apps/xenia_edge.png
+          cp assets/icon/256.png artifacts/xenia_edge/usr/share/icons/hicolor/256x256/apps/xenia_edge.png
+          cp assets/icon/512.png artifacts/xenia_edge/usr/share/icons/hicolor/512x512/apps/xenia_edge.png
+          cp assets/icon/1024.png artifacts/xenia_edge/usr/share/icons/hicolor/1024x1024/apps/xenia_edge.png
+
+          mkdir -p artifacts/xenia_edge/usr/bin
+          linuxdeploy --appdir artifacts/xenia_edge \
+            --executable "$binary" \
+            --desktop-file assets/xenia_edge.desktop \
+            --icon-file assets/icon/256.png \
+            --output appimage
+
+          appimage_file=$(find . -maxdepth 1 -name '*.AppImage' -type f | head -n1)
+          if [ -z "$appimage_file" ]; then
+            echo "::error::AppImage file not found after linuxdeploy"
+            exit 1
+          fi
+
+          mkdir -p artifacts/release
+          mv "$appimage_file" artifacts/release/xenia_edge_linux_aarch64_experimental.AppImage
+          chmod +x artifacts/release/xenia_edge_linux_aarch64_experimental.AppImage
+          cp LICENSE artifacts/release/
+
+      - name: Upload xenia edge ARM64 AppImage
+        if: steps.prepare_appimage.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: xenia_edge_linux_aarch64_experimental
+          path: artifacts/release
+          if-no-files-found: error
