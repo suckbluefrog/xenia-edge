@@ -646,8 +646,10 @@ void EmulatorWindow::AddLaunchedTitleToLibrary(uint32_t title_id,
   if (!game_library_) {
     return;
   }
-  game_library_->AddDisc(title_id, name, emulator_->last_launch_path(),
-                         std::string());
+  const auto& launched = emulator_->last_launch_path();
+  game_library_->AddDisc(title_id, name, launched, std::string());
+  // The disc we just booted becomes the default for next launch.
+  game_library_->SetDefaultPath(title_id, launched);
 
   // Adopt the running title's icon if we have no art yet. The SPA writes it to
   // the per-title GPD on boot, so a signed-in profile has it by now.
@@ -1920,6 +1922,8 @@ void EmulatorWindow::FileAddGames() {
       if (!changed) {
         continue;
       }
+      // A moved file reimports at its new path, so drop any now-missing ones.
+      library->PruneMissingPaths(primary.title_id);
       // STFS provides an icon; XEX/ISO don't. Only overwrite when we have one.
       if (!primary.icon_png.empty()) {
         library->SetIcon(primary.title_id, primary.icon_png);
@@ -3909,7 +3913,7 @@ std::filesystem::path EmulatorWindow::GetFilePickerInitialDirectory() const {
   // Recency from play data (newest first); the launch path from the library.
   for (const auto& title : profile_manager->ScanAllProfilesForTitles()) {
     auto* entry = game_library_->Find(title.title_id);
-    if (!entry) {
+    if (!entry || entry->paths.empty()) {
       continue;
     }
     const auto& path = entry->default_path().path;
