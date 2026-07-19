@@ -1592,6 +1592,22 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   }
   const LoadShaderInfo& load_shader_info = GetLoadShaderInfo(load_shader);
 
+  // Memexport-generated textures have their source in the host-imported buffer
+  // (guest RAM). The load below reads the device buffer, so copy the sampled
+  // range across first. A no-op for normal textures and non-memexport ranges.
+  // Scaled-resolve textures read from separate scaled buffers, not shared
+  // memory, so they are unaffected.
+  if (!texture_resolution_scaled) {
+    if (load_base) {
+      command_processor_.EnsureMemexportRangeInDeviceBuffer(
+          texture_key.base_page << 12, d3d12_texture.GetGuestBaseSize());
+    }
+    if (load_mips) {
+      command_processor_.EnsureMemexportRangeInDeviceBuffer(
+          texture_key.mip_page << 12, d3d12_texture.GetGuestMipsSize());
+    }
+  }
+
   // Get the guest layout.
   const texture_util::TextureGuestLayout& guest_layout =
       d3d12_texture.guest_layout();
@@ -1943,7 +1959,36 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
           source_box.front + std::max(depth >> level, uint32_t(1));
       source_box_ptr = &source_box;
     } else {
+      // Non-packed level: copy the whole footprint. The footprint is sized as
+      // the guest mip reduced then scaled, while the host mip subresource is
+      // the base scaled then reduced, so for the deepest mips of scaled
+      // textures the footprint can be a row or column larger. Compressed dests
+      // round up to the block and absorb it; for uncompressed dests clamp the
+      // copy to the exact subresource with an explicit source box to avoid
+      // overrunning. Clamp per axis to min(footprint, subresource) - a
+      // non-power-of-two axis can be smaller than the subresource while another
+      // axis is larger, and the box must not exceed the source footprint
+      // either.
       source_box_ptr = nullptr;
+      if (!host_block_compressed) {
+        const D3D12_SUBRESOURCE_FOOTPRINT& footprint =
+            location_source.PlacedFootprint.Footprint;
+        uint32_t dst_width = std::max(
+            (width * texture_resolution_scale_x) >> level, uint32_t(1));
+        uint32_t dst_height = std::max(
+            (height * texture_resolution_scale_y) >> level, uint32_t(1));
+        uint32_t dst_depth = std::max(depth >> level, uint32_t(1));
+        if (footprint.Width > dst_width || footprint.Height > dst_height ||
+            footprint.Depth > dst_depth) {
+          source_box.left = 0;
+          source_box.top = 0;
+          source_box.front = 0;
+          source_box.right = std::min(footprint.Width, dst_width);
+          source_box.bottom = std::min(footprint.Height, dst_height);
+          source_box.back = std::min(footprint.Depth, dst_depth);
+          source_box_ptr = &source_box;
+        }
+      }
     }
     for (uint32_t slice = 0; slice < array_size; ++slice) {
       command_list.D3DCopyTextureRegion(&location_dest, 0, 0, 0,

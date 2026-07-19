@@ -25,6 +25,10 @@ void SetFramerateLimit(uint32_t value);
 
 DECLARE_bool(gpu_allow_invalid_fetch_constants);
 
+DECLARE_bool(shared_memory_zero_copy);
+
+DECLARE_bool(memexport_await_fences);
+
 DECLARE_bool(non_seamless_cube_map);
 
 DECLARE_bool(half_pixel_offset);
@@ -70,6 +74,7 @@ DECLARE_bool(async_shader_skip_draws);
 DECLARE_bool(shader_profiling);
 
 DECLARE_bool(readback_resolve_half_pixel_offset);
+DECLARE_bool(readback_resolve_sync);
 
 DECLARE_bool(gpu_3d_to_2d_texture);
 

@@ -74,11 +74,28 @@ DEFINE_string(
 
 DEFINE_string(
     readback_resolve, "fast",
-    "Controls CPU readback of render-to-texture resolve results.\n"
-    " fast: Read from previous frame, copy every frame (default)\n"
-    " some: Read from previous frame, skip copy on cache hit\n"
-    " full: Wait for GPU to finish (accurate but slow, GPU-CPU sync stall)\n"
-    " none: Disable readback completely (some games render better without it)",
+    "Controls which render-to-texture resolves are copied back into guest "
+    "RAM.\n"
+    " fast: Copy only resolves the CPU reads back (default)\n"
+    " all: Copy every resolve\n"
+    " none: Disable readback completely (improves performance).\n",
+    "GPU");
+
+DEFINE_bool(
+    memexport_enable, true,
+    "Make memory export output visible to the CPU by routing the draws that "
+    "write it to a buffer aliasing guest RAM. Needed by games that read "
+    "exported data on the CPU. Disabling it keeps the output in device-local "
+    "memory, which is faster for the draws that consume it on the GPU. Applies "
+    "at title launch.",
+    "GPU");
+
+DEFINE_bool(
+    memexport_await_fences, true,
+    "Wait for the GPU to finish outstanding memory export before signalling a "
+    "fence the guest reads, so exported data is in guest RAM by the time the "
+    "guest looks at it. Disabling it avoids the stall but games reading "
+    "exported data on the CPU may see stale contents. Needs memexport_enable.",
     "GPU");
 
 DEFINE_bool(
@@ -93,22 +110,6 @@ DEFINE_bool(
     "Vulkan, SV_Barycentrics on Direct3D 12).",
     "GPU");
 
-DEFINE_bool(
-    readback_memexport, true,
-    "Read data written by memory export in shaders on the CPU. "
-    "This is needed in some games but many only access exported data on "
-    "the GPU, so can be disabled for minor optimization. When "
-    "combined with readback_memexport_fast, performance impact is minimal.",
-    "GPU");
-
-DEFINE_bool(readback_memexport_fast, true,
-            "Use fast (double-buffered, 1 frame delayed) readback for "
-            "memexport instead\n"
-            "of immediate GPU sync. Removes main performance penalty when "
-            "readback_memexport\n"
-            "is enabled at the expense of accuracy.",
-            "GPU");
-
 namespace xe {
 namespace gpu {
 
@@ -119,11 +120,8 @@ void SaveGPUSetting(GPUSetting setting, uint64_t value) {
     case GPUSetting::ClearMemoryPageState:
       OVERRIDE_bool(clear_memory_page_state, static_cast<bool>(value));
       break;
-    case GPUSetting::ReadbackMemexport:
-      OVERRIDE_bool(readback_memexport, static_cast<bool>(value));
-      break;
-    case GPUSetting::ReadbackMemexportFast:
-      OVERRIDE_bool(readback_memexport_fast, static_cast<bool>(value));
+    case GPUSetting::MemexportAwaitFences:
+      OVERRIDE_bool(memexport_await_fences, static_cast<bool>(value));
       break;
   }
 }
@@ -132,10 +130,8 @@ bool GetGPUSetting(GPUSetting setting) {
   switch (setting) {
     case GPUSetting::ClearMemoryPageState:
       return cvars::clear_memory_page_state;
-    case GPUSetting::ReadbackMemexport:
-      return cvars::readback_memexport;
-    case GPUSetting::ReadbackMemexportFast:
-      return cvars::readback_memexport_fast;
+    case GPUSetting::MemexportAwaitFences:
+      return cvars::memexport_await_fences;
     default:
       return false;
   }
@@ -143,10 +139,8 @@ bool GetGPUSetting(GPUSetting setting) {
 
 static ReadbackResolveMode ParseReadbackResolveMode() {
   const std::string& mode = cvars::readback_resolve;
-  if (mode == "full") {
-    return ReadbackResolveMode::kFull;
-  } else if (mode == "some") {
-    return ReadbackResolveMode::kSome;
+  if (mode == "all") {
+    return ReadbackResolveMode::kAll;
   } else if (mode == "none") {
     return ReadbackResolveMode::kDisabled;
   } else {
@@ -361,11 +355,8 @@ void CommandProcessor::SetReadbackResolveMode(ReadbackResolveMode mode) {
     case ReadbackResolveMode::kDisabled:
       mode_str = "none";
       break;
-    case ReadbackResolveMode::kSome:
-      mode_str = "some";
-      break;
-    case ReadbackResolveMode::kFull:
-      mode_str = "full";
+    case ReadbackResolveMode::kAll:
+      mode_str = "all";
       break;
     default:
       break;

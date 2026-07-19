@@ -179,10 +179,9 @@ DECLARE_bool(guide_button);
 DECLARE_string(config);
 
 DECLARE_bool(clear_memory_page_state);
+DECLARE_bool(memexport_await_fences);
 
 DECLARE_string(readback_resolve);
-
-DECLARE_bool(readback_memexport);
 
 DEFINE_transient_bool(return_to_ui, false,
                       "Return to UI process when game exits. Set automatically "
@@ -3471,10 +3470,10 @@ void EmulatorWindow::ToggleGPUSetting(gpu::GPUSetting setting) {
       SaveGPUSetting(GPUSetting::ClearMemoryPageState, new_value);
       cvar_name = "clear_memory_page_state";
       break;
-    case GPUSetting::ReadbackMemexport:
-      new_value = !cvars::readback_memexport;
-      SaveGPUSetting(GPUSetting::ReadbackMemexport, new_value);
-      cvar_name = "readback_memexport";
+    case GPUSetting::MemexportAwaitFences:
+      new_value = !cvars::memexport_await_fences;
+      SaveGPUSetting(GPUSetting::MemexportAwaitFences, new_value);
+      cvar_name = "memexport_await_fences";
       break;
   }
 
@@ -3513,13 +3512,10 @@ void EmulatorWindow::CycleReadbackResolve() {
   gpu::ReadbackResolveMode next;
   switch (current) {
     case gpu::ReadbackResolveMode::kDisabled:
-      next = gpu::ReadbackResolveMode::kSome;
-      break;
-    case gpu::ReadbackResolveMode::kSome:
       next = gpu::ReadbackResolveMode::kFast;
       break;
     case gpu::ReadbackResolveMode::kFast:
-      next = gpu::ReadbackResolveMode::kFull;
+      next = gpu::ReadbackResolveMode::kAll;
       break;
     default:
       next = gpu::ReadbackResolveMode::kDisabled;

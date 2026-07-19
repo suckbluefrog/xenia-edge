@@ -1214,6 +1214,22 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   }
   const LoadShaderInfo& load_shader_info = GetLoadShaderInfo(load_shader);
 
+  // Memexport-generated textures have their source in the host-imported buffer
+  // (guest RAM); the load below reads the device buffer, so copy the sampled
+  // range across first. A no-op for normal textures and non-memexport ranges.
+  // Scaled-resolve textures read from separate scaled buffers, not shared
+  // memory, so they are unaffected.
+  if (!texture_key.scaled_resolve) {
+    if (load_base) {
+      command_processor_.EnsureMemexportRangeInDeviceBuffer(
+          texture_key.base_page << 12, vulkan_texture.GetGuestBaseSize());
+    }
+    if (load_mips) {
+      command_processor_.EnsureMemexportRangeInDeviceBuffer(
+          texture_key.mip_page << 12, vulkan_texture.GetGuestMipsSize());
+    }
+  }
+
   // Get the guest layout.
   const texture_util::TextureGuestLayout& guest_layout =
       vulkan_texture.guest_layout();
@@ -1771,10 +1787,17 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     copy_region.imageOffset.x = 0;
     copy_region.imageOffset.y = 0;
     copy_region.imageOffset.z = 0;
-    copy_region.imageExtent.width =
-        std::max((width * texture_resolution_scale_x) >> level, UINT32_C(1));
-    copy_region.imageExtent.height =
-        std::max((height * texture_resolution_scale_y) >> level, UINT32_C(1));
+    // The image mip is scale-then-reduce (max((dim*scale)>>level,1)) while the
+    // buffer footprint (bufferRowLength/bufferImageHeight) is
+    // reduce-then-scale, so for the deepest mips of scaled textures the mip can
+    // be a row or column larger than the buffer holds. Clamp the copy extent to
+    // the footprint so the GPU never reads past the buffer.
+    copy_region.imageExtent.width = std::min(
+        std::max((width * texture_resolution_scale_x) >> level, UINT32_C(1)),
+        copy_region.bufferRowLength);
+    copy_region.imageExtent.height = std::min(
+        std::max((height * texture_resolution_scale_y) >> level, UINT32_C(1)),
+        copy_region.bufferImageHeight);
     copy_region.imageExtent.depth = std::max(depth >> level, UINT32_C(1));
   }
 
@@ -2078,6 +2101,12 @@ VkImageView VulkanTextureCache::VulkanTexture::GetOrCreate3DAs2DImageView(
     image_create_info.format = format;
     image_create_info.extent.width = key().GetWidth();
     image_create_info.extent.height = key().GetHeight();
+    if (key().scaled_resolve) {
+      image_create_info.extent.width *=
+          vulkan_texture_cache.draw_resolution_scale_x();
+      image_create_info.extent.height *=
+          vulkan_texture_cache.draw_resolution_scale_y();
+    }
     image_create_info.extent.depth = 1;
     image_create_info.mipLevels = 1;
     image_create_info.arrayLayers = 1;

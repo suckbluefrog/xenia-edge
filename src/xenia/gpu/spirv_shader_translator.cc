@@ -707,6 +707,9 @@ void SpirvShaderTranslator::StartTranslation() {
     var_main_vfetch_address_ = builder_->createVariable(
         spv::NoPrecision, spv::StorageClassFunction, type_int_,
         "xe_var_vfetch_address", const_int_0_);
+    var_main_vfetch_bound_ = builder_->createVariable(
+        spv::NoPrecision, spv::StorageClassFunction, type_int_,
+        "xe_var_vfetch_bound", const_int_0_);
     var_main_tfetch_lod_ = builder_->createVariable(
         spv::NoPrecision, spv::StorageClassFunction, type_float_,
         "xe_var_tfetch_lod", const_float_0_);
@@ -1218,7 +1221,15 @@ void SpirvShaderTranslator::ProcessLabel(uint32_t cf_index) {
   new_case->addPredecessor(main_switch_header_);
   // The previous block may have already been terminated if was exece.
   if (!builder_->getBuildPoint()->isTerminated()) {
-    builder_->createBranch(new_case);
+    // Don't fall through directly into the next case block. An OpSwitch case
+    // fall-through inside the main loop makes the NVIDIA shader compiler emit a
+    // non-terminating loop. Instead re-enter the loop with this label as the
+    // program counter, like an unconditional jump to it does.
+    main_switch_next_pc_phi_operands_.push_back(
+        builder_->makeIntConstant(int(cf_index)));
+    main_switch_next_pc_phi_operands_.push_back(
+        builder_->getBuildPoint()->getId());
+    builder_->createBranch(main_loop_continue_);
   }
   function.addBlock(new_case);
   builder_->setBuildPoint(new_case);
@@ -1583,6 +1594,7 @@ void SpirvShaderTranslator::ResetUcodeInvocationStateInMain() {
   builder_->createStore(const_int4_0_, var_main_loop_address_);
   builder_->createStore(const_float_0_, var_main_previous_scalar_);
   builder_->createStore(const_int_0_, var_main_vfetch_address_);
+  builder_->createStore(const_int_0_, var_main_vfetch_bound_);
   builder_->createStore(const_float_0_, var_main_tfetch_lod_);
   builder_->createStore(const_float3_0_, var_main_tfetch_gradients_h_);
   builder_->createStore(const_float3_0_, var_main_tfetch_gradients_v_);
